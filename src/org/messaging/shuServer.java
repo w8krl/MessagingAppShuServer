@@ -26,11 +26,14 @@ public class shuServer {
 
         // Store user socket mapping
         private static HashMap<String, Socket> userSockets = new HashMap<>();
+
+        // map of user / channel subscriptions
         private static HashMap<String, HashSet<String>> subscriptions = new HashMap<>();
 
-        private static ArrayList<Message> messages = new ArrayList<>();
+        // map of active users per channel - for broadcasting
+        private static HashMap<String, HashSet<String>> activeChannelUsers = new HashMap<>();
 
-        List<ArrayList> test = new ArrayList<>();
+        private static ArrayList<Message> messages = new ArrayList<>();
 
 
         // Active channel - null or one.
@@ -90,7 +93,6 @@ public class shuServer {
         }
 
         synchronized void messageBroadCast(String activeChannel) {
-
             Socket clientSocket;
             try {
                 // Get filtered messages
@@ -98,15 +100,15 @@ public class shuServer {
                         .filter(msg -> msg.getChannel() == activeChannel)
                         .collect(Collectors.toList());
 
-                // Get list of subs
-                HashSet<String> broadcastList = subscriptions.get(activeChannel);
+                // Get list of subs - only those connected via open session
+                HashSet<String> broadcastList = activeChannelUsers.get(activeChannel);
 
                 // Iterate list of subs and print via message list resp (takes a list and does the JSON bit)
                 for (String user : broadcastList) {
                     if (!user.equals(this.user)) {
                         clientSocket = userSockets.get(user);
                         PrintWriter clientTo = new PrintWriter(clientSocket.getOutputStream(), true);
-                        clientTo.println(new ErrorResponse(channelMessages.toString()));
+                        clientTo.println(new MessageListResponse(channelMessages));
                     }
                 }
 
@@ -145,10 +147,46 @@ public class shuServer {
                         continue;
                     }
 
-                    // open channel request, check login first
+                    // OPEN CHANNEL - ADD USER TO ACTIVE CHANNEL
                     if (user != null && (request = OpenRequest.fromJSON(json)) != null) {
                         activeChannel = ((OpenRequest) request).getChannel();
+
+                        synchronized (clientHandler.class) {
+                            HashSet<String> users;
+                            if (!activeChannelUsers.containsKey(activeChannel)) {
+                                // if channel doesn't exist, automatically create it
+                                users = new HashSet<>();
+                            } else {
+                                // If channel exists add client
+                                users = activeChannelUsers.get(activeChannel);
+                            }
+                            users.add(user);
+                            activeChannelUsers.put(activeChannel, users);
+                        }
                         toClient.println(new SuccessResponse());
+
+                        System.out.printf("%s active in channel %s\n", user, activeChannel);
+                        displaySubscriptions(); // print to server terminal for debug
+                        continue;
+                    }
+
+                    // DISCONNECT CHANNEL ACTIVE USER - ELSE WILL CONTINUE TO RECEIVE REALTIME UPDATES
+                    if (user != null && (request = CloseRequest.fromJSON(json)) != null) {
+                        String channelName = ((CloseRequest) request).getChannel();
+
+                        synchronized (clientHandler.class) {
+                            HashSet<String> users;
+                            if (activeChannelUsers.containsKey(channelName)) {
+                                users = activeChannelUsers.get(channelName);
+                                users.remove(user);
+                                activeChannelUsers.put(channelName, users);
+                                activeChannel = null; // finished publishing to channel (for now)
+                                toClient.println(new SuccessResponse());
+                            } else {
+                                toClient.println(new ErrorResponse("CHANNEL" + channelName + " NOT FOUND: " + user));
+                            }
+                        }
+
                         continue;
                     }
 
@@ -175,6 +213,33 @@ public class shuServer {
                         }
                     }
 
+                    // Unsubscribe request
+                    if (user != null && (request = UnubscribeRequest.fromJSON(json)) != null) {
+
+                        synchronized (clientHandler.class) {
+                            String channelName = ((UnubscribeRequest) request).getChannel();
+                            HashSet<String> users;
+
+                            try {
+                                if (subscriptions.containsKey(channelName)) {
+                                    users = subscriptions.get(channelName);
+                                    users.remove(user);
+                                    subscriptions.put(channelName, users);
+                                    toClient.println(new SuccessResponse());
+//                                    System.out.printf("%s unsubscribed to channel %s\n", user, channelName);
+                                } else {
+                                    toClient.println(new ErrorResponse("NO SUCH CHANNEL: " + channelName));
+                                }
+
+                            } catch (Exception e) {
+                                System.out.printf("Error unsubscribing from channel\n" +
+                                        "%s", e.getMessage());
+                            }
+                            displaySubscriptions(); // print to server terminal for debug
+                            continue;
+                        }
+                    }
+
 
                     if (user != null && (request = PublishRequest.fromJSON(json)) != null) {
 
@@ -193,19 +258,26 @@ public class shuServer {
 
                     }
 
-                    // read request? Must be logged in
-//                    if (login != null && ReadRequest.fromJSON(json) != null) {
-//                        List<Message> msgs;
-//                        // synchronized access to the shared message board
-//                        synchronized (clientHandler.class) {
-//                            msgs = board.subList(read, board.size());
-//                        }
-//                        // adjust read counter
-//                        read = board.size();
-//                        // response: list of unread messages
-//                        toClient.println(new MessageListResponse(msgs));
-//                        continue;
-//                    }
+                    // Specific get request - i.e. user requested a fromDate (GetRequest)
+                    if (user != null && (request = GetRequest.fromJSON(json)) != null) {
+
+                        System.out.println("ALLLLLLL");
+                        System.out.println(messages.toString());
+
+
+                        List<Message> filteredMessages;
+                        long dateFrom = ((GetRequest) request).getTimestamp();
+                        // synchronized access to the shared message board
+                        synchronized (clientHandler.class) {
+                            filteredMessages = messages.stream()
+                                    .filter(msg -> msg.getChannel().contains(activeChannel) )
+                                    .filter(msg -> msg.getTimestamp() >= dateFrom )
+                                    .collect(Collectors.toList());
+                        }
+                        // response: list of filtered messages
+                        toClient.println(new MessageListResponse(messages));
+                        continue;
+                    }
 
                     // quit request? Must be logged in; no response
                     if (user != null && QuitRequest.fromJSON(json) != null) {

@@ -1,17 +1,17 @@
 package org.messaging;
 
 
-import org.json.simple.*;  // required for JSON encoding and decoding
+import org.json.simple.JSONObject;
 
-public class OpenRequest extends Request {
+public class CloseRequest extends Request {
     // class name to be used as tag in JSON representation
     private static final String _class =
-            OpenRequest.class.getSimpleName();
+            CloseRequest.class.getSimpleName();
 
     private String identity;
 
     // Constructor; throws NullPointerException if message is null.
-    public OpenRequest(String identity) {
+    public CloseRequest(String identity) {
         // check for null
         if (identity == null)
             throw new NullPointerException();
@@ -32,7 +32,7 @@ public class OpenRequest extends Request {
     // Tries to deserialize a OpenRequest instance from a JSONObject.
     // Returns null if deserialization was not successful (e.g. because a
     // different object was serialized).
-    public static OpenRequest fromJSON(Object val) {
+    public static CloseRequest fromJSON(Object val) {
         try {
             JSONObject obj = (JSONObject)val;
             // check for _class field matching class name
@@ -41,7 +41,7 @@ public class OpenRequest extends Request {
             // deserialize posted message
             String message = (String)obj.get("identity");
             // construct the object to return (checking for nulls)
-            return new OpenRequest(message);
+            return new CloseRequest(message);
         } catch (ClassCastException | NullPointerException e) {
             return null;
         }

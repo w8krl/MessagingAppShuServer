@@ -7,11 +7,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Scanner;
+import java.util.*;
 
 public class ShuClient {
 
@@ -26,9 +22,11 @@ public class ShuClient {
     private BufferedReader fromServer;
     private BufferedReader stdIn;
 
+    // User can sub to more than one channel
+    private HashSet<String> myChannels = new HashSet<>();
 
     // Menu options
-    private final Integer[] OPT_ARR = new Integer[]{1, 2, 3, 4, 9};
+    private final Integer[] OPT_ARR = new Integer[]{1, 2, 3, 4,5, 9};
     private final List<Integer> OPT_LIST = new ArrayList<>(Arrays.asList(OPT_ARR));
 
     // Identity parameters
@@ -52,6 +50,19 @@ public class ShuClient {
 
     public String getIdentity() {
         return identity;
+    }
+
+    public void displayChannels(){
+
+        System.out.printf("Listing subscribed channels:");
+        if(myChannels.size() > 0){
+            for (String channel : myChannels) {
+                System.out.println(channel);
+            }
+        } else {
+            System.out.println("You aren't connected to any channels");
+        }
+
     }
 
     public void setIdentity() {
@@ -111,6 +122,7 @@ public class ShuClient {
             }
 
             setActiveChannel(newChannel);
+            myChannels.add(newChannel);
             req = new OpenRequest(newChannel);
             toServer.println(req);
 
@@ -128,8 +140,8 @@ public class ShuClient {
 
     private void enterChannel() {
         System.out.println("You are connected to: " + activeChannel);
-        System.out.println("Type: \"#quit\" to disconnect");
-        System.out.println("Type: \"#fromDate\" (to apply timestamp tiler)");
+        System.out.print("Keywords: \"#quit\" to disconnect ");
+        System.out.println("|| \"#fromDate\" (to apply timestamp filter)");
 
 
         Request req;
@@ -147,7 +159,7 @@ public class ShuClient {
 
                 if (userInput.equals("#fromDate")) {
                     long fromDate;
-                    try{
+                    try {
                         System.out.println("Enter date to filter from: (number)");
                         Scanner in = new Scanner(System.in);
                         fromDate = in.nextLong();
@@ -185,7 +197,6 @@ public class ShuClient {
 
     private void Subscribe() {
         // Continue to sub channel
-
         System.out.println("Enter channel name to receive instance messages:");
         Request req;
         String userInput;
@@ -194,37 +205,40 @@ public class ShuClient {
             Scanner sc = new Scanner(userInput);
             String subChannel = sc.next();
             req = new SubscribeRequest(subChannel);
+            myChannels.add(subChannel);
             toServer.println(req);
         } catch (IOException e) {
             System.out.println("Error during channel subscription");
         }
     }
 
+
+
     private void Unsubscribe() {
         // Continue to sub channel
 
-        if (activeChannel == null) {
-            System.out.println("Not connected to any channels.");
-            return;
-        }
-        Request req;
-        req = new UnubscribeRequest(activeChannel);
-        toServer.println(req);
-    }
+        displayChannels();
 
+        // Still allows user to send an erroneous request, proof that it is handled at the server
+        try{
+            String userInput = stdIn.readLine();
+            Request req;
+            req = new UnubscribeRequest(userInput);
+            toServer.println(req);
+        } catch (IOException e) {
+        }
+    }
     private void GetMessages() {
         enterChannel();
 
     }
 
-
     public boolean closed() {
         return this.closed;
     }
 
-
     // console based UI
-    public int displaySessionUI() {
+    public void displaySessionUI() {
 
         int selectedOption;
         if (identity == null) setIdentity();
@@ -239,6 +253,7 @@ public class ShuClient {
             System.out.println("2) Subscribe to channel");
             System.out.println("3) Unsubscribe from channel");
             System.out.println("4) View all messages for my channels");
+            System.out.println("5) Show my channels");
             System.out.println("9) Quit App");
 
             try {
@@ -252,18 +267,20 @@ public class ShuClient {
                     case 2 -> Subscribe();
                     case 3 -> Unsubscribe();
                     case 4 -> GetMessages();
+                    case 5 -> displayChannels();
                     default -> throw new IllegalStateException("Unexpected value: " + selectedOption);
                 }
 
-            } catch (IOException e) {
+            } catch (NumberFormatException e) {
                 System.out.println("Invalid input");
-                return -1;
+                break;
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
         } while (OPT_LIST.contains(selectedOption));
 
         closeConnections();
 
-        return selectedOption;
 
     }
 

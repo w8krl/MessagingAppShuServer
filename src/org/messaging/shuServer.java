@@ -62,7 +62,7 @@ public class shuServer {
         }
 
         public void displaySubscriptions() {
-
+            // for testing only
             int subCount = subscriptions.size();
             System.out.printf("Displaying Active channel subscriptions (%d users)\n", subCount);
             if (subCount > 0) {
@@ -92,13 +92,13 @@ public class shuServer {
             }
         }
 
-        synchronized void messageBroadCast(String activeChannel) {
+        synchronized void messageBroadCast(String activeChannel, Message message) {
             Socket clientSocket;
             try {
-                // Get filtered messages
-                List<Message> channelMessages = messages.stream()
-                        .filter(msg -> msg.getChannel() == activeChannel)
-                        .collect(Collectors.toList());
+                // Only one message will ever be transmitted per broadcast,
+                // using list for compatibility with MessageListResponse
+                List<Message> broadCastMessage = new ArrayList<>();
+                broadCastMessage.add(message);
 
                 // Get list of subs - only those connected via open session
                 HashSet<String> broadcastList = activeChannelUsers.get(activeChannel);
@@ -108,7 +108,7 @@ public class shuServer {
                     if (!user.equals(this.user)) {
                         clientSocket = userSockets.get(user);
                         PrintWriter clientTo = new PrintWriter(clientSocket.getOutputStream(), true);
-                        clientTo.println(new MessageListResponse(channelMessages));
+                        clientTo.println(new MessageListResponse(broadCastMessage)); // send to actively connected users
                     }
                 }
 
@@ -126,9 +126,6 @@ public class shuServer {
 
                     long ts = clock.tick();
 
-                    if (user != null) System.out.printf("%s: %s\n", user, input);
-                    else System.out.println(input);
-
                     Object json = JSONValue.parse(input);
                     Request request;
 
@@ -139,9 +136,8 @@ public class shuServer {
                         user = ((LoginRequest) request).getName();
                         synchronized (clientHandler.class) {
                             userSockets.put(user, client);
-                            displayConnections();
                         }
-
+                        System.out.printf("%s logged in\n", user);
                         // response acknowledging the login request
                         toClient.println(new SuccessResponse());
                         continue;
@@ -165,8 +161,7 @@ public class shuServer {
                         }
                         toClient.println(new SuccessResponse());
 
-                        System.out.printf("%s active in channel %s\n", user, activeChannel);
-                        displaySubscriptions(); // print to server terminal for debug
+                        System.out.printf("%s connected to channel %s\n", user, activeChannel);
                         continue;
                     }
 
@@ -174,19 +169,20 @@ public class shuServer {
                     if (user != null && (request = CloseRequest.fromJSON(json)) != null) {
                         String channelName = ((CloseRequest) request).getChannel();
 
+                        // update active channel connections
                         synchronized (clientHandler.class) {
                             HashSet<String> users;
                             if (activeChannelUsers.containsKey(channelName)) {
                                 users = activeChannelUsers.get(channelName);
-                                users.remove(user);
-                                activeChannelUsers.put(channelName, users);
+                                users.remove(user); //remove
+                                activeChannelUsers.put(channelName, users); //update list without user
+                                System.out.printf("%s disconnected from channel: %s\n", user, activeChannel);
                                 activeChannel = null; // finished publishing to channel (for now)
                                 toClient.println(new SuccessResponse());
                             } else {
                                 toClient.println(new ErrorResponse("CHANNEL" + channelName + " NOT FOUND: " + user));
                             }
                         }
-
                         continue;
                     }
 
@@ -208,7 +204,7 @@ public class shuServer {
                             toClient.println(new SuccessResponse());
 
                             System.out.printf("%s subscribed to channel %s\n", user, channelName);
-                            displaySubscriptions(); // print to server terminal for debug
+//                            displaySubscriptions(); // print to server terminal for debug
                             continue;
                         }
                     }
@@ -226,7 +222,8 @@ public class shuServer {
                                     users.remove(user);
                                     subscriptions.put(channelName, users);
                                     toClient.println(new SuccessResponse());
-//                                    System.out.printf("%s unsubscribed to channel %s\n", user, channelName);
+                                    System.out.printf("%s unsubscribed from channel %s\n",
+                                            user, channelName);
                                 } else {
                                     toClient.println(new ErrorResponse("NO SUCH CHANNEL: " + channelName));
                                 }
@@ -235,7 +232,7 @@ public class shuServer {
                                 System.out.printf("Error unsubscribing from channel\n" +
                                         "%s", e.getMessage());
                             }
-                            displaySubscriptions(); // print to server terminal for debug
+//                            displaySubscriptions(); // print to server terminal for debug
                             continue;
                         }
                     }
@@ -247,12 +244,14 @@ public class shuServer {
                             toClient.println(new ErrorResponse("No channel selected to publish to.\nPlease open a channel."));
                             continue;
                         } else {
+                            Message message = new Message(((PublishRequest) request).getMessage(), user, activeChannel, ts);
                             synchronized (clientHandler.class) {
-                                messages.add(new Message(((PublishRequest) request).getMessage(), user, activeChannel, ts));
-                                messageBroadCast(activeChannel);
-                                System.out.println(new SuccessResponse());
-
+                                messages.add(message);
                             }
+                            messageBroadCast(activeChannel, message);
+                            toClient.println(new SuccessResponse());
+                            System.out.printf("%s published: \"%s\" to channel: %s\n",
+                                    user, message.getBody(), activeChannel);
                         }
                         continue;
 
@@ -261,21 +260,20 @@ public class shuServer {
                     // Specific get request - i.e. user requested a fromDate (GetRequest)
                     if (user != null && (request = GetRequest.fromJSON(json)) != null) {
 
-                        System.out.println("ALLLLLLL");
-                        System.out.println(messages.toString());
-
-
                         List<Message> filteredMessages;
                         long dateFrom = ((GetRequest) request).getTimestamp();
                         // synchronized access to the shared message board
                         synchronized (clientHandler.class) {
                             filteredMessages = messages.stream()
-                                    .filter(msg -> msg.getChannel().contains(activeChannel) )
-                                    .filter(msg -> msg.getTimestamp() >= dateFrom )
+                                    .filter(msg -> msg.getChannel().contains(activeChannel))
+                                    .filter(msg -> msg.getTimestamp() >= dateFrom)
                                     .collect(Collectors.toList());
                         }
                         // response: list of filtered messages
-                        toClient.println(new MessageListResponse(messages));
+                        toClient.println(new MessageListResponse(filteredMessages));
+                        System.out.printf("GET request from %s in channel %s [time >= %d]\n",
+                                user, activeChannel, ((GetRequest) request).getTimestamp());
+
                         continue;
                     }
 
@@ -300,10 +298,12 @@ public class shuServer {
 
         int portNumber = 8765;
 
+        System.out.println("Server initialising");
+
         try (ServerSocket serverSocket = new ServerSocket(portNumber);) {
             while (true) {
-                System.out.println("Server started");
                 Socket client = serverSocket.accept();
+                System.out.println("New connection from " + client.getLocalPort());
                 new clientHandler(client).start();
             }
         } catch (IOException e) {

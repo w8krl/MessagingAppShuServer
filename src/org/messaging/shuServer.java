@@ -111,12 +111,9 @@ public class shuServer {
                         clientTo.println(new MessageListResponse(broadCastMessage)); // send to actively connected users
                     }
                 }
-
             } catch (Exception e) {
                 System.out.println("Error during broadcast");
             }
-
-
         }
 
         public void run() {
